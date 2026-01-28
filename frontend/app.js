@@ -40,9 +40,6 @@ createApp({
             selectedSchemaTable: null,
             schemaSearchSource: '',
             schemaSearchTarget: '',
-            svgWidth: 1200,
-            svgHeight: 600,
-            connectionLines: [], 
             svgWidth: 0,
             svgHeight: 0,
             connectionLines: [],
@@ -298,39 +295,6 @@ async compareSchema() {
             if (!searchText) return tables;
             return tables.filter(t => t.toLowerCase().includes(searchText.toLowerCase()));
         },
-        updateConnectionLines() {
-            if (!this.schemaResult) return;
-            this.connectionLines = [];
-            
-            const commonTables = this.schemaResult.table_diff.common;
-            commonTables.forEach(table => {
-                const leftEl = document.querySelector(`[data-table-name="${table}"][data-panel-side="left"]`);
-                const rightEl = document.querySelector(`[data-table-name="${table}"][data-panel-side="right"]`);
-                
-                if (leftEl && rightEl) {
-                    const leftRect = leftEl.getBoundingClientRect();
-                    const rightRect = rightEl.getBoundingClientRect();
-                    const container = leftEl.closest('.schema-compare-container').getBoundingClientRect();
-                    
-                    const x1 = leftRect.right - container.left;
-                    const y1 = leftRect.top + leftRect.height / 2 - container.top;
-                    const x2 = rightRect.left - container.left;
-                    const y2 = rightRect.top + rightRect.height / 2 - container.top;
-                    
-                    const hasChanges = !!this.schemaResult.table_details[table];
-                    const color = hasChanges ? '#E6A23C' : '#67C23A';
-                    
-                    const path = `M ${x1} ${y1} C ${x1 + 50} ${y1}, ${x2 - 50} ${y2}, ${x2} ${y2}`;
-                    
-                    this.connectionLines.push({
-                        path: path,
-                        color: color,
-                        hasArrow: hasChanges
-                    });
-                }
-            });
-        }, 
-        // 处理窗口缩放
         handleSchemaResize() {
             if (this.scrollDebounceTimer) {
                 cancelAnimationFrame(this.scrollDebounceTimer);
@@ -339,52 +303,46 @@ async compareSchema() {
                 this.updateConnectionLines();
             });
         },
-        // 更新连线（主函数）
         updateConnectionLines() {
             if (!this.schemaResult || !this.schemaResult.table_diff) return;
-            
+
             const leftPanel = this.$refs.leftSchemaPanel;
             const rightPanel = this.$refs.rightSchemaPanel;
-            
-            if (!leftPanel || !rightPanel) return;
-            
-            const container = leftPanel.parentElement;
+            const container = this.$refs.schemaContainer;
+
+            if (!leftPanel || !rightPanel || !container) return;
+
             const containerRect = container.getBoundingClientRect();
-            
-            this.svgWidth = containerRect.width;
-            this.svgHeight = containerRect.height;
-            
             const lines = [];
-            
-            // 遍历共同的表
-            (this.schemaResult.table_diff.common || []).forEach(item => {
-                const leftEl = leftPanel.querySelector(`[data-table-name="${item.source_table}"][data-panel-side="left"]`);
-                const rightEl = rightPanel.querySelector(`[data-table-name="${item.target_table}"][data-panel-side="right"]`);
-                
+            const commonTables = this.schemaResult.table_diff.common || [];
+
+            commonTables.forEach(table => {
+                const leftEl = leftPanel.querySelector(`[data-table-name="${table}"][data-panel-side="left"]`);
+                const rightEl = rightPanel.querySelector(`[data-table-name="${table}"][data-panel-side="right"]`);
+
                 if (leftEl && rightEl) {
                     const leftRect = leftEl.getBoundingClientRect();
                     const rightRect = rightEl.getBoundingClientRect();
-                    
-                    // 计算相对于容器的坐标
+
+                    // 相对于容器的坐标
                     const x1 = leftRect.right - containerRect.left;
                     const y1 = leftRect.top - containerRect.top + leftRect.height / 2;
                     const x2 = rightRect.left - containerRect.left;
                     const y2 = rightRect.top - containerRect.top + rightRect.height / 2;
-                    
-                    // 贝塞尔曲线控制点（产生平滑弧度）
-                    const distance = x2 - x1;
-                    const controlPointX = x1 + distance * 0.5;
-                    
-                    const pathData = `M ${x1} ${y1} C ${controlPointX} ${y1}, ${controlPointX} ${y2}, ${x2} ${y2}`;
-                    
+
+                    // 贝塞尔曲线
+                    const midX = (x1 + x2) / 2;
+                    const pathData = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
+
+                    const hasChanges = !!this.schemaResult.table_details[table];
                     lines.push({
                         path: pathData,
-                        color: item.has_changes ? '#E6A23C' : '#409EFF',
-                        hasArrow: item.has_changes
+                        color: hasChanges ? '#E6A23C' : '#67C23A',
+                        hasArrow: hasChanges
                     });
                 }
             });
-            
+
             this.connectionLines = lines;
         }
     }, 

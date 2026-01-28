@@ -69,6 +69,8 @@ async def get_tables(config: DBConfig):
 
 @app.post("/api/compare-schema")
 async def compare_schema(request: CompareRequest):
+    source_db = None
+    target_db = None
     try:
         source_db = DBConnector(
             request.source.host,
@@ -88,13 +90,28 @@ async def compare_schema(request: CompareRequest):
         source_db.connect()
         target_db.connect()
 
+        # 获取表和视图
         source_tables = source_db.get_tables()
         target_tables = target_db.get_tables()
+        source_views = source_db.get_views()
+        target_views = target_db.get_views()
 
+        # 对比表
         table_diff = SchemaDiff.compare_tables(source_tables, target_tables)
+        # 对比视图
+        view_diff = SchemaDiff.compare_tables(source_views, target_views)
 
-        results = {"table_diff": table_diff, "table_details": {}}
+        results = {
+            "table_diff": {
+                "added": table_diff["added"] + view_diff["added"],
+                "removed": table_diff["removed"] + view_diff["removed"],
+                "common": table_diff["common"] + view_diff["common"],
+            },
+            "table_details": {},
+            "view_list": source_views + [v for v in target_views if v not in source_views],
+        }
 
+        # 对比共同表的结构
         for table in table_diff["common"]:
             source_struct = source_db.get_table_structure(table)
             target_struct = target_db.get_table_structure(table)
@@ -120,15 +137,24 @@ async def compare_schema(request: CompareRequest):
                     "indexes": idx_diff,
                 }
 
-        # 使用智能依赖排序生成同步SQL
+        # 视图：只要存在就标记为需要同步（视图定义可能变化）
+        for view in view_diff["common"]:
+            results["table_details"][view] = {"is_view": True}
+
+        # 构建 schema_diff_data，正确标记类型
         schema_diff_data = {
-            "source_only": [{"name": t, "type": "table"} for t in table_diff["added"]],
-            "target_only": [
-                {"name": t, "type": "table"} for t in table_diff["removed"]
-            ],
-            "different": [
-                {"name": t, "type": "table"} for t in results["table_details"].keys()
-            ],
+            "source_only": (
+                [{"name": t, "type": "table"} for t in table_diff["added"]] +
+                [{"name": v, "type": "view"} for v in view_diff["added"]]
+            ),
+            "target_only": (
+                [{"name": t, "type": "table"} for t in table_diff["removed"]] +
+                [{"name": v, "type": "view"} for v in view_diff["removed"]]
+            ),
+            "different": (
+                [{"name": t, "type": "table"} for t in table_diff["common"] if t in results["table_details"]] +
+                [{"name": v, "type": "view"} for v in view_diff["common"]]
+            ),
         }
 
         sync_sql = SQLGenerator.generate_schema_sync_sql(
@@ -140,18 +166,21 @@ async def compare_schema(request: CompareRequest):
         )
 
         results["sync_sql"] = sync_sql.split("\n")
-
-        source_db.close()
-        target_db.close()
-
         return results
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if source_db:
+            source_db.close()
+        if target_db:
+            target_db.close()
 
 
 @app.post("/api/compare")
 async def compare_databases(request: CompareRequest):
+    source_db = None
+    target_db = None
     try:
         source_db = DBConnector(
             request.source.host,
@@ -215,14 +244,15 @@ async def compare_databases(request: CompareRequest):
             "table_details": table_result,
             "sync_sql": sql_parts,
         }
-
-        source_db.close()
-        target_db.close()
-
         return results
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if source_db:
+            source_db.close()
+        if target_db:
+            target_db.close()
 
 
 frontend_path = os.path.join(os.path.dirname(__file__), "..", "frontend")

@@ -99,6 +99,9 @@ def sort_objects_by_dependency(conn, database, object_names):
     Returns:
         排序后的对象名列表
     """
+    if not object_names:
+        return []
+
     # 分离表和视图
     with conn.cursor() as cursor:
         cursor.execute(

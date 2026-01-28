@@ -1,8 +1,17 @@
 import pymysql
+import re
 from typing import Dict, List, Any, Optional
 
 
 class DBConnector:
+    _DANGEROUS_CHARS = re.compile(r'[`;\'"\\]|--')
+
+    @staticmethod
+    def _validate_identifier(name: str) -> str:
+        if not name or DBConnector._DANGEROUS_CHARS.search(name):
+            raise ValueError(f"Invalid identifier: {name}")
+        return name
+
     def __init__(
         self, host: str, port: int, user: str, password: str, database: str = ""
     ):
@@ -42,6 +51,7 @@ class DBConnector:
         return [list(row.values())[0] for row in results]
 
     def get_table_structure(self, table: str) -> Dict[str, Any]:
+        table = self._validate_identifier(table)
         columns = self.execute_query(f"SHOW FULL COLUMNS FROM `{table}`")
         indexes = self.execute_query(f"SHOW INDEX FROM `{table}`")
         create_result = self.execute_query(f"SHOW CREATE TABLE `{table}`")[0]
@@ -58,12 +68,14 @@ class DBConnector:
     def get_table_data(
         self, table: str, limit: Optional[int] = None
     ) -> List[Dict[str, Any]]:
+        table = self._validate_identifier(table)
         query = f"SELECT * FROM `{table}`"
-        if limit:
+        if limit and isinstance(limit, int) and limit > 0:
             query += f" LIMIT {limit}"
         return self.execute_query(query)
 
     def get_primary_key(self, table: str) -> List[str]:
+        table = self._validate_identifier(table)
         indexes = self.execute_query(
             f"SHOW INDEX FROM `{table}` WHERE Key_name = 'PRIMARY'"
         )
@@ -75,33 +87,12 @@ class DBConnector:
         exclude = ["information_schema", "mysql", "performance_schema", "sys"]
         return [row["Database"] for row in results if row["Database"] not in exclude]
 
-        def check_object_type(conn, database, object_name):
-            """
-            检查数据库对象类型
+    def get_views(self) -> List[str]:
+        query = "SHOW FULL TABLES WHERE Table_type = 'VIEW'"
+        results = self.execute_query(query)
+        return [list(row.values())[0] for row in results]
 
-            Returns:
-                'BASE TABLE' | 'VIEW' | None
-            """
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT TABLE_TYPE 
-                    FROM information_schema.TABLES 
-                    WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s
-                """,
-                    (database, object_name),
-                )
-                result = cursor.fetchone()
-                return result["TABLE_TYPE"] if result else None
-
-        def get_views(conn, database):
-            """获取视图列表"""
-            with conn.cursor() as cursor:
-                cursor.execute(f"USE `{database}`")
-                cursor.execute("SHOW FULL TABLES WHERE Table_type = 'VIEW'")
-                return [row[0] for row in cursor.fetchall()]
-
-        def is_view(conn, database, object_name):
-            """判断对象是否为视图"""
-            obj_type = check_object_type(conn, database, object_name)
-            return obj_type == "VIEW"
+    def get_view_definition(self, view: str) -> str:
+        view = self._validate_identifier(view)
+        result = self.execute_query(f"SHOW CREATE VIEW `{view}`")[0]
+        return result.get("Create View") or list(result.values())[1]
