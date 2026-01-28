@@ -1,0 +1,23 @@
+# 依赖目录
+node_modules/
+vendor/
+ 
+# 编译输出
+dist/
+build/
+*.log
+ 
+# 环境配置
+.env
+.env.local
+ 
+# IDE 配置
+.vscode/
+.idea/
+ 
+# 操作系统文件
+.DS_Store
+Thumbs.db
+
+
+.spec-workflow
