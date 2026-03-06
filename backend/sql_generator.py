@@ -1,4 +1,5 @@
 from typing import Dict, List, Any
+from schema_diff import SchemaDiff
 
 
 class SQLGenerator:
@@ -181,32 +182,82 @@ class SQLGenerator:
         for obj_name in sorted_objects:
             # 判断对象类型
             obj_type = None
-            if obj_name in all_source_tables:
-                obj_type = "table"
-            elif obj_name in all_source_views:
-                obj_type = "view"
+            is_different = False
+            is_source_only = False
+
+            for item in schema_diff.get("different", []):
+                if item["name"] == obj_name:
+                    obj_type = item["type"]
+                    is_different = True
+                    break
+            if not obj_type:
+                for item in schema_diff.get("source_only", []):
+                    if item["name"] == obj_name:
+                        obj_type = item["type"]
+                        is_source_only = True
+                        break
 
             if not obj_type:
                 continue
 
-            # 获取创建语句
-            with source_conn.cursor() as cursor:
-                if obj_type == "table":
-                    cursor.execute(f"SHOW CREATE TABLE `{source_db}`.`{obj_name}`")
-                    result = cursor.fetchone()
-                    create_stmt = result.get("Create Table") or list(result.values())[1]
-                else:  # view
+            sql_parts.append(f"-- {obj_type.upper()}: {obj_name}\n")
+
+            if obj_type == "table":
+                if is_source_only:
+                    # 源库新增的表：直接创建
+                    with source_conn.cursor() as cursor:
+                        cursor.execute(f"SHOW CREATE TABLE `{source_db}`.`{obj_name}`")
+                        result = cursor.fetchone()
+                        create_stmt = (
+                            result.get("Create Table") or list(result.values())[1]
+                        )
+                    # 替换数据库名
+                    create_stmt = create_stmt.replace(
+                        f"`{source_db}`.", f"`{target_db}`."
+                    )
+                    sql_parts.append(f"{create_stmt};\n\n")
+                elif is_different:
+                    # 表结构不同：使用 ALTER 语句增量修改
+                    # 获取源库和目标库的表结构
+                    with source_conn.cursor() as cursor:
+                        cursor.execute(f"SHOW COLUMNS FROM `{source_db}`.`{obj_name}`")
+                        source_cols = cursor.fetchall()
+                        cursor.execute(f"SHOW INDEX FROM `{source_db}`.`{obj_name}`")
+                        source_indexes = cursor.fetchall()
+
+                    with target_conn.cursor() as cursor:
+                        cursor.execute(f"SHOW COLUMNS FROM `{target_db}`.`{obj_name}`")
+                        target_cols = cursor.fetchall()
+                        cursor.execute(f"SHOW INDEX FROM `{target_db}`.`{obj_name}`")
+                        target_indexes = cursor.fetchall()
+
+                    # 对比列差异
+                    col_diff = SchemaDiff.compare_columns(source_cols, target_cols)
+                    # 对比索引差异
+                    idx_diff = SchemaDiff.compare_indexes(
+                        source_indexes, target_indexes
+                    )
+
+                    # 生成修改语句
+                    sql_parts.extend(
+                        SQLGenerator.generate_column_sql(obj_name, col_diff)
+                    )
+                    sql_parts.extend(
+                        SQLGenerator.generate_index_sql(obj_name, idx_diff)
+                    )
+                    if col_diff or idx_diff:
+                        sql_parts.append("\n")
+            else:  # view
+                # 视图：无论新增还是修改，都使用删除重建方式（视图定义通常是整体替换）
+                with source_conn.cursor() as cursor:
                     cursor.execute(f"SHOW CREATE VIEW `{source_db}`.`{obj_name}`")
                     result = cursor.fetchone()
                     create_stmt = result.get("Create View") or list(result.values())[1]
 
-            sql_parts.append(f"-- {obj_type.upper()}: {obj_name}\n")
-            sql_parts.append(
-                f"DROP {obj_type.upper()} IF EXISTS `{target_db}`.`{obj_name}`;\n"
-            )
-            # 替换数据库名
-            create_stmt = create_stmt.replace(f"`{source_db}`.", f"`{target_db}`.")
-            sql_parts.append(f"{create_stmt};\n\n")
+                sql_parts.append(f"DROP VIEW IF EXISTS `{target_db}`.`{obj_name}`;\n")
+                # 替换数据库名
+                create_stmt = create_stmt.replace(f"`{source_db}`.", f"`{target_db}`.")
+                sql_parts.append(f"{create_stmt};\n\n")
 
         sql_parts.append("-- ==========================================\n")
         sql_parts.append("-- 同步完成\n")

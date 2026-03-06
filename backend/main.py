@@ -3,13 +3,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 import os
+import json
 
 from db_connector import DBConnector
 from schema_diff import SchemaDiff
 from data_diff import DataDiff
 from sql_generator import SQLGenerator
+
+# 配置文件目录
+CONFIG_DIR = os.path.join(os.path.dirname(__file__), "configs")
+if not os.path.exists(CONFIG_DIR):
+    os.makedirs(CONFIG_DIR)
+
+# 上次连接配置文件
+LAST_CONFIG_FILE = os.path.join(CONFIG_DIR, "last-connection.json")
 
 app = FastAPI(title="MySQL Diff Tool")
 
@@ -39,10 +48,23 @@ class CompareRequest(BaseModel):
     data_limit: Optional[int] = 10000
 
 
+class SaveConfigRequest(BaseModel):
+    name: str
+    source: DBConfig
+    target: DBConfig
+    selectedSourceTable: str = ""
+    selectedTargetTable: str = ""
+    compareMode: str = "table"
+    compareData: bool = True
+    dataLimit: int = 10000
+    createdAt: str = ""
+
+
 @app.post("/api/get-databases")
 async def get_databases(config: DBConfig):
     try:
-        db = DBConnector(config.host, config.port, config.user, config.password)
+        db = DBConnector(config.host, config.port,
+                         config.user, config.password)
         db.connect()
         databases = db.get_databases()
         db.close()
@@ -55,7 +77,8 @@ async def get_databases(config: DBConfig):
 async def get_tables(config: DBConfig):
     try:
         if not config.database:
-            raise HTTPException(status_code=400, detail="Database name is required")
+            raise HTTPException(
+                status_code=400, detail="Database name is required")
         db = DBConnector(
             config.host, config.port, config.user, config.password, config.database
         )
@@ -65,6 +88,94 @@ async def get_tables(config: DBConfig):
         return {"success": True, "tables": tables}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# 配置管理API
+@app.get("/api/configs")
+async def get_configs():
+    try:
+        configs = []
+        if os.path.exists(CONFIG_DIR):
+            for filename in os.listdir(CONFIG_DIR):
+                if filename.endswith(".json"):
+                    file_path = os.path.join(CONFIG_DIR, filename)
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        config = json.load(f)
+                        configs.append(config)
+
+        # 按创建时间排序
+        configs.sort(key=lambda x: x.get("createdAt", ""), reverse=True)
+        return {"success": True, "configs": configs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/configs")
+async def save_config(request: SaveConfigRequest):
+    try:
+        config_name = request.name.strip()
+        if not config_name:
+            raise HTTPException(status_code=400, detail="配置名称不能为空")
+
+        config_data = request.dict()
+        if not config_data.get("createdAt"):
+            import datetime
+            config_data["createdAt"] = datetime.datetime.now().isoformat()
+
+        # 保存配置到文件
+        filename = f"{config_name}.json"
+        file_path = os.path.join(CONFIG_DIR, filename)
+
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(config_data, f, ensure_ascii=False, indent=2)
+
+        return {"success": True, "message": f"配置 '{config_name}' 已保存"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/configs/{name}")
+async def delete_config(name: str):
+    try:
+        filename = f"{name}.json"
+        file_path = os.path.join(CONFIG_DIR, filename)
+
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="配置文件不存在")
+
+        os.remove(file_path)
+        return {"success": True, "message": f"配置 '{name}' 已删除"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/last-config")
+async def get_last_config():
+    try:
+        if os.path.exists(LAST_CONFIG_FILE):
+            with open(LAST_CONFIG_FILE, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            return {"success": True, "config": config}
+        else:
+            return {"success": False, "message": "无上次连接配置"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/last-config")
+async def save_last_config(request: SaveConfigRequest):
+    try:
+        config_data = request.dict()
+        if not config_data.get("createdAt"):
+            import datetime
+            config_data["createdAt"] = datetime.datetime.now().isoformat()
+
+        with open(LAST_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config_data, f, ensure_ascii=False, indent=2)
+
+        return {"success": True, "message": "上次连接配置已保存"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/compare-schema")
@@ -216,16 +327,20 @@ async def compare_databases(request: CompareRequest):
         table_result = {"schema": {"columns": col_diff, "indexes": idx_diff}}
 
         sql_parts = []
-        sql_parts.extend(SQLGenerator.generate_column_sql(target_table, col_diff))
-        sql_parts.extend(SQLGenerator.generate_index_sql(target_table, idx_diff))
+        sql_parts.extend(SQLGenerator.generate_column_sql(
+            target_table, col_diff))
+        sql_parts.extend(SQLGenerator.generate_index_sql(
+            target_table, idx_diff))
 
         if request.compare_data:
             source_pk_cols = source_db.get_primary_key(source_table)
             target_pk_cols = target_db.get_primary_key(target_table)
 
             if source_pk_cols and target_pk_cols:
-                source_data = source_db.get_table_data(source_table, request.data_limit)
-                target_data = target_db.get_table_data(target_table, request.data_limit)
+                source_data = source_db.get_table_data(
+                    source_table, request.data_limit)
+                target_data = target_db.get_table_data(
+                    target_table, request.data_limit)
 
                 data_diff_result = DataDiff.compare_data(
                     source_data, target_data, source_pk_cols

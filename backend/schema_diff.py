@@ -9,8 +9,10 @@ class SchemaDiff:
         source_map = {col["Field"]: col for col in source_cols}
         target_map = {col["Field"]: col for col in target_cols}
 
-        added = [col for name, col in source_map.items() if name not in target_map]
-        removed = [col for name, col in target_map.items() if name not in source_map]
+        added = [col for name, col in source_map.items()
+                 if name not in target_map]
+        removed = [col for name, col in target_map.items()
+                   if name not in source_map]
         modified = []
 
         for name in set(source_map.keys()) & set(target_map.keys()):

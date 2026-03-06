@@ -67,7 +67,8 @@ class DependencyResolver:
 
     def topological_sort(self):
         """拓扑排序（Kahn算法）"""
-        queue = deque([node for node, degree in self.in_degree.items() if degree == 0])
+        queue = deque(
+            [node for node, degree in self.in_degree.items() if degree == 0])
         sorted_result = []
 
         while queue:
@@ -114,7 +115,8 @@ def sort_objects_by_dependency(conn, database, object_names):
         )
 
         results = cursor.fetchall()
-        tables = [r["TABLE_NAME"] for r in results if r["TABLE_TYPE"] == "BASE TABLE"]
+        tables = [r["TABLE_NAME"]
+                  for r in results if r["TABLE_TYPE"] == "BASE TABLE"]
         views = [r["TABLE_NAME"] for r in results if r["TABLE_TYPE"] == "VIEW"]
 
     resolver = DependencyResolver(conn, database)

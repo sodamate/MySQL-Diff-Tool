@@ -21,8 +21,10 @@ class DataDiff:
         if not pk_cols:
             return {"error": "No primary key found"}
 
-        source_map = {DataDiff._make_row_key(row, pk_cols): row for row in source_data}
-        target_map = {DataDiff._make_row_key(row, pk_cols): row for row in target_data}
+        source_map = {DataDiff._make_row_key(
+            row, pk_cols): row for row in source_data}
+        target_map = {DataDiff._make_row_key(
+            row, pk_cols): row for row in target_data}
 
         added = []
         modified = []
