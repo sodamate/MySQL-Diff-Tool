@@ -1,4 +1,5 @@
 import pymysql
+import sqlparse
 import re
 from typing import Dict, List, Any, Optional
 
@@ -96,3 +97,28 @@ class DBConnector:
         view = self._validate_identifier(view)
         result = self.execute_query(f"SHOW CREATE VIEW `{view}`")[0]
         return result.get("Create View") or list(result.values())[1]
+
+    @staticmethod
+    def normalize_sql(sql: str) -> str:
+        """
+        标准化 SQL语句格式，用于对比
+        
+        Args:
+           sql: 原始 SQL语句
+            
+        Returns:
+            格式化后的 SQL语句
+        """
+        if not sql:
+            return sql
+        
+        # 使用 sqlparse 格式化 SQL
+        formatted = sqlparse.format(
+           sql,
+            reindent=True,           # 重新缩进
+            keyword_case='upper',    # 关键字转大写
+            strip_whitespace=True,   # 去除多余空白
+            strip_comments=False     # 保留注释
+        )
+        
+        return formatted.strip()

@@ -6,6 +6,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 import os
 import json
+import logging
+from datetime import datetime
 
 from db_connector import DBConnector
 from schema_diff import SchemaDiff
@@ -21,6 +23,23 @@ if not os.path.exists(CONFIG_DIR):
 LAST_CONFIG_FILE = os.path.join(CONFIG_DIR, "last-connection.json")
 
 app = FastAPI(title="MySQL Diff Tool")
+
+# 配置日志输出到文件
+log_dir = os.path.join(os.path.dirname(__file__), "logs")
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+log_file = os.path.join(log_dir, f"diff_tool_{datetime.now().strftime('%Y%m%d')}.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file, encoding='utf-8'),
+        logging.StreamHandler()  # 同时输出到控制台
+    ]
+)
+logger = logging.getLogger(__name__)
+logger.info(f"日志文件：{log_file}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -206,6 +225,10 @@ async def compare_schema(request: CompareRequest):
         target_tables = target_db.get_tables()
         source_views = source_db.get_views()
         target_views = target_db.get_views()
+        
+        logger.info(f"开始对比 Schema...")
+        logger.info(f"源库表数：{len(source_tables)}, 视图数：{len(source_views)}")
+        logger.info(f"目标库表数：{len(target_tables)}, 视图数：{len(target_views)}")
 
         # 对比表
         table_diff = SchemaDiff.compare_tables(source_tables, target_tables)
@@ -248,9 +271,33 @@ async def compare_schema(request: CompareRequest):
                     "indexes": idx_diff,
                 }
 
-        # 视图：只要存在就标记为需要同步（视图定义可能变化）
+        # 视图对比：先格式化 SQL，再进行字符串对比
+        view_details = {}
+        different_views = []
+        
         for view in view_diff["common"]:
-            results["table_details"][view] = {"is_view": True}
+            source_def = source_db.get_view_definition(view)
+            target_def = target_db.get_view_definition(view)
+            
+            # 标准化 SQL 格式后对比
+            source_normalized = DBConnector.normalize_sql(source_def)
+            target_normalized = DBConnector.normalize_sql(target_def)
+            
+            if source_normalized != target_normalized:
+                logger.info(f"🔍 发现差异视图：{view}")
+                logger.info(f"源视图标准化SQL：{source_normalized}")
+                logger.info(f"目标视图标准化SQL：{target_normalized}")
+                different_views.append(view)
+                view_details[view] = {
+                    "is_view": True,
+                    "has_diff": True,
+                    "source_definition": source_def,
+                    "target_definition": target_def,
+                }
+        
+        # 只有存在差异的视图才加入 table_details
+        for view in different_views:
+            results["table_details"][view] = view_details[view]
 
         # 构建 schema_diff_data，正确标记类型
         schema_diff_data = {
@@ -264,7 +311,7 @@ async def compare_schema(request: CompareRequest):
             ),
             "different": (
                 [{"name": t, "type": "table"} for t in table_diff["common"] if t in results["table_details"]] +
-                [{"name": v, "type": "view"} for v in view_diff["common"]]
+                [{"name": v, "type": "view"} for v in different_views]  # 只有真正有差异的视图
             ),
         }
 
